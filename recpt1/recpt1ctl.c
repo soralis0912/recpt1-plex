@@ -59,7 +59,8 @@ main(int argc, char **argv)
     };
 
     while((result = getopt_long(argc, argv, "p:c:i:e:t:hvl",
-                                long_options, &option_index)) != -1) {
+                                long_options, &option_index)) != -1) 
+	{
         switch(result) {
         case 'h':
             fprintf(stderr, "\n");

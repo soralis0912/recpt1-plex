@@ -70,6 +70,8 @@ typedef struct {
 
     QUEUE_T *queue; //invariable
     ISDB_T_FREQ_CONV_TABLE *table; //invariable
+	boolean IsPX4DeviceFlag;   // variable                                                               // Jacky Han Added
+	int channel_name_index;   // variable                                                                // Jacky Han Added
     sock_data *sock_data; //invariable
     pthread_t signal_thread; //invariable
     decoder *decoder; //invariable
@@ -87,7 +89,8 @@ extern boolean f_exit;
 int tune(char *channel, thread_data *tdata, char *device);
 int close_tuner(thread_data *tdata);
 void show_channels(void);
-ISDB_T_FREQ_CONV_TABLE *searchrecoff(char *channel);
+ISDB_T_FREQ_CONV_TABLE *searchrecoff(thread_data *tdata, char *channel);                                // Jacky Han Modified
+boolean get_px4_statistics(int fd, int type, boolean use_bell, int ch_name_index);                      // Jacky Han Added
 void calc_cn(int fd, int type, boolean use_bell);
 int parse_time(char *rectimestr, int *recsec);
 void do_bell(int bell);
