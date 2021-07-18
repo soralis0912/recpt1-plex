@@ -1,8 +1,8 @@
 DESTDIR =
-prefix = @prefix@
-exec_prefix = @exec_prefix@
-bindir = @bindir@
-CC = @CC@
+prefix = /usr/local
+exec_prefix = ${prefix}
+bindir = ${exec_prefix}/bin
+CC = gcc
 
 TARGET = recpt1
 TARGET2 = recpt1ctl
@@ -13,7 +13,7 @@ RELEASE_VERSION = "c8688d7d6382_with_http_server_RC4 by stz2012"
 CPPFLAGS = -I../driver -Wall -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64
 CFLAGS   = -O2 -g -pthread
 
-LIBS     = @LIBS@
+LIBS     = -lpthread -lm -larib25 
 LIBS2    = -lm
 LIBS3    = -lpthread -lm
 LDFLAGS  =

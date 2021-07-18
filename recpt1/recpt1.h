@@ -2,12 +2,14 @@
 #ifndef _RECPT1_H_
 #define _RECPT1_H_
 
-#define NUM_BSDEV       16
-#define NUM_ISDB_T_DEV  16
+#define NUM_BSDEV       84                                      // Jacky Han Modified
+#define NUM_ISDB_T_DEV  84                                      // Jacky Han Modified
 #define CHTYPE_SATELLITE    0        /* satellite digital */
 #define CHTYPE_GROUND       1        /* terrestrial digital */
 #define MAX_QUEUE           8192
 #define MAX_READ_SIZE       (188 * 87) /* 188*87=16356 splitterが188アライメントを期待しているのでこの数字とする*/
+#define MAX_QUEUE_PX4PX5PX6       512                                                                                                  // Jacky Han Added
+#define MAX_READ_SIZE_PX4PX5PX6   (188 * 816) /* 188*816=153408 splitterが188アライメントを期待しているのでこの数字とする*/       // Jacky Han Added
 #define WRITE_SIZE          (1024 * 1024 * 2)
 #define TRUE                1
 #define FALSE               0
@@ -15,9 +17,11 @@
 #define ISDB_T_NODE_LIMIT 24        // 32:ARIB limit 24:program maximum
 #define ISDB_T_SLOT_LIMIT 8
 
+//#define ASV5220_USE_APKEY1
+
 typedef struct {
     int size;
-    u_char buffer[MAX_READ_SIZE];
+    u_char* pBuffer;        // Jacky Han Modified
 } BUFSZ;
 
 typedef struct {

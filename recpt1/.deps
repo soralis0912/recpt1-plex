@@ -1,0 +1,16 @@
+recpt1.o: recpt1.c ../driver/pt1_ioctl.h config.h decoder.h recpt1core.h \
+ recpt1.h mkpath.h tssplitter_lite.h asicen_dtv.h
+decoder.o: decoder.c decoder.h config.h
+mkpath.o: mkpath.c
+tssplitter_lite.o: tssplitter_lite.c decoder.h config.h recpt1.h \
+ tssplitter_lite.h
+recpt1core.o: recpt1core.c recpt1core.h ../driver/pt1_ioctl.h config.h \
+ decoder.h recpt1.h mkpath.h tssplitter_lite.h version.h pt1_dev.h \
+ px4px5px6_ioctl.h
+asicen_dtv.o: asicen_dtv.c asicen_dtv.h recpt1.h
+recpt1ctl.o: recpt1ctl.c recpt1core.h ../driver/pt1_ioctl.h config.h \
+ decoder.h recpt1.h mkpath.h tssplitter_lite.h
+recpt1core.o: recpt1core.c recpt1core.h ../driver/pt1_ioctl.h config.h \
+ decoder.h recpt1.h mkpath.h tssplitter_lite.h version.h pt1_dev.h \
+ px4px5px6_ioctl.h
+asicen_dtv.o: asicen_dtv.c asicen_dtv.h recpt1.h

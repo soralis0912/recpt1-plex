@@ -35,9 +35,11 @@
 #include "mkpath.h"
 
 #include "tssplitter_lite.h"
+#include "asicen_dtv.h"
 
 /* maximum write length at once */
-#define SIZE_CHANK 1316
+#define SIZE_CHANK         1316
+#define PX4PX5PX6_SIZE_CHANK     MAX_READ_SIZE_PX4PX5PX6  // Jacky Han Added
 
 /* ipc message size */
 #define MSGSZ     255
@@ -45,6 +47,7 @@
 /* globals */
 extern boolean f_exit;
 
+extern char* isdb_ch_name_table[];            // Jacky Han Added
 
 /* read 1st line from socket */
 void read_line(int socket, char *p){
@@ -77,17 +80,21 @@ mq_recv(void *t)
     char service_id[32] = {0};
     int recsec = 0, time_to_add = 0;
 
-    while(1) {
-        if(msgrcv(tdata->msqid, &rbuf, MSGSZ, 1, 0) < 0) {
+    while(1) 
+	{
+        if(msgrcv(tdata->msqid, &rbuf, MSGSZ, 1, 0) < 0)
+		{
             return NULL;
         }
 
         sscanf(rbuf.mtext, "ch=%s t=%d e=%d sid=%s", channel, &recsec, &time_to_add, service_id);
 
-        if(strcmp(channel, tdata->table->parm_freq)) {
+        if(strcmp(channel, tdata->table->parm_freq)) 
+		{
             int current_type = tdata->table->type;
-            ISDB_T_FREQ_CONV_TABLE *table = searchrecoff(channel);
-            if (table == NULL) {
+            ISDB_T_FREQ_CONV_TABLE *table = searchrecoff(tdata, channel);              // Jacky Han Modified
+            if (table == NULL) 
+			{
                 fprintf(stderr, "Invalid Channel: %s\n", channel);
                 goto CHECK_TIME_TO_ADD;
             }
@@ -97,48 +104,87 @@ mq_recv(void *t)
             ioctl(tdata->tfd, STOP_REC, 0);
 
             /* wait for remainder */
-            while(tdata->queue->num_used > 0) {
+            while(tdata->queue->num_used > 0) 
+			{
                 usleep(10000);
             }
 
-            if (tdata->table->type != current_type) {
+            if (tdata->table->type != current_type) 
+			{
                 /* re-open device */
                 if(close_tuner(tdata) != 0)
                     return NULL;
 
-                tune(channel, tdata, NULL);
-            } else {
+                //****************************************************
+                //*********** Jacky Han Modification Start ***********
+                //****************************************************
+				if(tdata->IsPX4PX5PX6DeviceFlag == TRUE)
+				{
+                   if(tune(channel, tdata, NULL) != 0)
+				      return NULL;
+				}
+                else
+				   tune(channel, tdata, NULL);
+                //****************************************************
+                //************ Jacky Han Modification End ************
+                //****************************************************
+            } 
+			else 
+			{
                 /* SET_CHANNEL only */
-                const FREQUENCY freq = {
+                const FREQUENCY freq = 
+				{
                   .frequencyno = tdata->table->set_freq,
                   .slot = tdata->table->add_freq,
                 };
-                if(ioctl(tdata->tfd, SET_CHANNEL, &freq) < 0) {
-                    fprintf(stderr, "Cannot tune to the specified channel\n");
+                if(ioctl(tdata->tfd, SET_CHANNEL, &freq) < 0) 
+				{
+                    fprintf(stderr, "(mq_recv) Cannot tune to the specified channel\n");
                     goto CHECK_TIME_TO_ADD;
                 }
-                calc_cn(tdata->tfd, tdata->table->type, FALSE);
+
+                //****************************************************
+                //*********** Jacky Han Modification Start ***********
+                //****************************************************
+				if(tdata->IsPX4PX5PX6DeviceFlag == TRUE)
+				{     
+#if 0		// 2017.09.18			
+				   get_px4px5px6_statistics(tdata->tfd, tdata->table->type, FALSE, tdata->channel_name_index);
+#endif
+				}
+				else
+				{
+                   calc_cn(tdata->tfd, tdata->table->type, FALSE);
+				}
+                //****************************************************
+                //************ Jacky Han Modification End ************
+                //****************************************************
             }
             /* restart recording */
-            if(ioctl(tdata->tfd, START_REC, 0) < 0) {
-                fprintf(stderr, "Tuner cannot start recording\n");
+            if(ioctl(tdata->tfd, START_REC, 0) < 0) 
+			{
+                fprintf(stderr, "(mq_recv) Tuner cannot start recording\n");
                 return NULL;
             }
         }
 
 CHECK_TIME_TO_ADD:
-        if(time_to_add) {
+        if(time_to_add) 
+		{
             tdata->recsec += time_to_add;
             fprintf(stderr, "Extended %d sec\n", time_to_add);
         }
 
-        if(recsec) {
+        if(recsec) 
+		{
             time_t cur_time;
             time(&cur_time);
-            if(cur_time - tdata->start_time > recsec) {
+            if(cur_time - tdata->start_time > recsec) 
+			{
                 f_exit = TRUE;
             }
-            else {
+            else 
+			{
                 tdata->recsec = recsec;
                 fprintf(stderr, "Total recording time = %d sec\n", recsec);
             }
@@ -155,6 +201,13 @@ create_queue(size_t size)
 {
     QUEUE_T *p_queue;
     int memsize = sizeof(QUEUE_T) + size * sizeof(BUFSZ*);
+
+//fprintf(stderr, "(create_queue)\n");
+//fprintf(stderr, "(create_queue)----------------------------------\n");
+//fprintf(stderr, "(create_queue) size : %d\n",size);
+//fprintf(stderr, "(create_queue) sizeof(QUEUE_T) : %d\n",sizeof(QUEUE_T));
+//fprintf(stderr, "(create_queue) sizeof(BUFSZ*) : %d\n",sizeof(BUFSZ*));
+//fprintf(stderr, "(create_queue) memsize : %d\n",memsize);
 
     p_queue = (QUEUE_T*)calloc(memsize, sizeof(char));
 
@@ -173,8 +226,61 @@ create_queue(size_t size)
 void
 destroy_queue(QUEUE_T *p_queue)
 {
+
+//fprintf(stderr, "(destroy_queue)\n");
+
     if(!p_queue)
         return;
+
+    //****************************************************
+    //************* Jacky Han Insertion Start ************
+    //****************************************************
+    BUFSZ *buffer;
+
+    pthread_mutex_lock(&p_queue->mutex);
+
+
+
+//fprintf(stderr, "(destroy_queue)----------------------------------\n");
+//fprintf(stderr, "(destroy_queue) p_queue->num_used : %d\n",p_queue->num_used);
+//fprintf(stderr, "(destroy_queue) p_queue->out : %d\n",p_queue->out);
+//fprintf(stderr, "(destroy_queue) p_queue->num_avail : %d\n",p_queue->num_avail);
+
+    while(p_queue->num_used != 0)
+	{
+
+
+          /* take buffer address */
+          buffer = p_queue->buffer[p_queue->out];
+
+		  if(buffer)
+		  {
+
+//fprintf(stderr, "(destroy_queue) Release buffer\n");
+
+		     free(buffer->pBuffer);
+             free(buffer);
+		  }
+
+
+          /* move position marker for output to next position */
+          p_queue->out++;
+          p_queue->out %= p_queue->size;
+
+          /* update counters */
+          p_queue->num_avail++;
+          p_queue->num_used--;
+
+//fprintf(stderr, "(destroy_queue) p_queue->num_used : %d\n",p_queue->num_used);
+//fprintf(stderr, "(destroy_queue) p_queue->out : %d\n",p_queue->out);
+//fprintf(stderr, "(destroy_queue) p_queue->num_avail : %d\n",p_queue->num_avail);
+
+    }
+
+    pthread_mutex_unlock(&p_queue->mutex);
+    //****************************************************
+    //************** Jacky Han Insertion End *************
+    //****************************************************
 
     pthread_mutex_destroy(&p_queue->mutex);
     pthread_cond_destroy(&p_queue->cond_avail);
@@ -320,7 +426,7 @@ reader_func(void *p)
             break;
         }
 
-        sbuf.data = qbuf->buffer;
+        sbuf.data = qbuf->pBuffer;            // Jacky Han Modified
         sbuf.size = qbuf->size;
 
         buf = sbuf; /* default */
@@ -398,10 +504,30 @@ reader_func(void *p)
             int size_remain = buf.size;
             int offset = 0;
 
-            while(size_remain > 0) {
-                int ws = size_remain < SIZE_CHANK ? size_remain : SIZE_CHANK;
+//fprintf(stderr,"*********************************************\n");
+//fprintf(stderr,"size_remain : %d\n",size_remain);
+
+            while(size_remain > 0) 
+			{
+				//****************************************************
+				//*********** Jacky Han Modification Start ***********
+				//****************************************************
+                int ws;
+
+				if(tdata->IsPX4PX5PX6DeviceFlag)
+				   ws = size_remain < PX4PX5PX6_SIZE_CHANK ? size_remain : PX4PX5PX6_SIZE_CHANK;
+				else
+				   ws = size_remain < SIZE_CHANK ? size_remain : SIZE_CHANK;
+				//****************************************************
+				//************ Jacky Han Modification End ************
+				//****************************************************
+
+//fprintf(stderr,"ws : %d\n",ws);
 
                 wc = write(wfd, buf.data + offset, ws);
+
+//fprintf(stderr,"wc(1) : %d\n",wc);
+
                 if(wc < 0) {
                     perror("write");
                     file_err = 1;
@@ -431,6 +557,7 @@ reader_func(void *p)
             }
         }
 
+		free(qbuf->pBuffer);            // Jacky Han Added
         free(qbuf);
         qbuf = NULL;
 
@@ -464,7 +591,13 @@ reader_func(void *p)
             }
 
             if(!fileless && !file_err) {
+
+//fprintf(stderr,"buf.size : %d\n",buf.size);
+
                 wc = write(wfd, buf.data, buf.size);
+
+//fprintf(stderr,"wc(2) : %d\n",wc);
+
                 if(wc < 0) {
                     perror("write");
                     file_err = 1;
@@ -493,8 +626,8 @@ reader_func(void *p)
 
     time_t cur_time;
     time(&cur_time);
-    fprintf(stderr, "Recorded %dsec\n",
-            (int)(cur_time - tdata->start_time));
+
+    fprintf(stderr, "(PID:%d)(CH:%s) Recorded %dsec\n",getpid(),isdb_ch_name_table[tdata->channel_name_index], (int)(cur_time - tdata->start_time));               // Jacky Han Modified
 
     return NULL;
 }
@@ -614,7 +747,7 @@ main(int argc, char **argv)
     pthread_t signal_thread;
     pthread_t reader_thread;
     pthread_t ipc_thread;
-    QUEUE_T *p_queue = create_queue(MAX_QUEUE);
+    QUEUE_T *p_queue = NULL; // Jacky Han Modified
     BUFSZ   *bufptr;
     decoder *decoder = NULL;
     splitter *splitter = NULL;
@@ -629,7 +762,8 @@ main(int argc, char **argv)
 
     int result;
     int option_index;
-    struct option long_options[] = {
+    struct option long_options[] = 
+	{
 #ifdef HAVE_LIBARIB25
         { "b25",       0, NULL, 'b'},
         { "B25",       0, NULL, 'b'},
@@ -669,10 +803,21 @@ main(int argc, char **argv)
     int connected_socket = 0, listening_socket = 0;
     unsigned int len;
     char *channel = NULL;
+#if 0		// 2017.09.18
+	boolean ChannelLockFlag;                 // Jacky Han Added
+#endif
+    boolean DropFirstReceivingDataCounter;   // Jacky Han Added
+
+//fprintf(stderr, "\n(main)\n");
+
+	tdata.IsPX4PX5PX6DeviceFlag = FALSE;              // Jacky Han Added
+	tdata.channel_name_index = 166;             // Jacky Han Added
 
     while((result = getopt_long(argc, argv, "br:smn:ua:H:p:d:hvli:",
-                                long_options, &option_index)) != -1) {
-        switch(result) {
+                                long_options, &option_index)) != -1) 
+	{
+        switch(result) 
+		{
         case 'b':
             use_b25 = TRUE;
             fprintf(stderr, "using B25...\n");
@@ -717,7 +862,8 @@ main(int argc, char **argv)
         /* following options require argument */
         case 'n':
             val = atoi(optarg);
-            switch(val) {
+            switch(val) 
+			{
             case 11:
                 tdata.lnb = 1;
                 break;
@@ -754,26 +900,31 @@ main(int argc, char **argv)
         }
     }
 
-    if(use_http){    // http-server add-
+    if(use_http)             // http-server add-
+	{    
         fprintf(stderr, "run as a daemon..\n");
-        if(daemon(1,1)){
+        if(daemon(1,1))
+		{
             perror("failed to start");
             return 1;
         }
-        fprintf(stderr, "pid = %d\n", getpid());
+
+//        fprintf(stderr, "pid = %d\n", getpid());
 
         struct sockaddr_in sin;
         int ret;
         int sock_optval = 1;
 
         listening_socket = socket(AF_INET, SOCK_STREAM, 0);
-        if ( listening_socket == -1 ){
+        if ( listening_socket == -1 )
+		{
             perror("socket");
             return 1;
         }
 
         if ( setsockopt(listening_socket, SOL_SOCKET, SO_REUSEADDR,
-                &sock_optval, sizeof(sock_optval)) == -1 ){
+                &sock_optval, sizeof(sock_optval)) == -1 )
+		{
             perror("setsockopt");
             return 1;
         }
@@ -782,38 +933,46 @@ main(int argc, char **argv)
         sin.sin_port = htons(port_http);
         sin.sin_addr.s_addr = htonl(INADDR_ANY);
 
-        if ( bind(listening_socket, (struct sockaddr *)&sin, sizeof(sin)) < 0 ){
+        if ( bind(listening_socket, (struct sockaddr *)&sin, sizeof(sin)) < 0 )
+		{
             perror("bind");
             return 1;
         }
 
         ret = listen(listening_socket, SOMAXCONN);
-        if ( ret == -1 ){
+        if ( ret == -1 )
+		{
             perror("listen");
             return 1;
         }
         fprintf(stderr,"listening at port %d\n", port_http);
         //set rectime to the infinite
-        if(parse_time("-",&tdata.recsec) != 0){
+        if(parse_time("-",&tdata.recsec) != 0)
+		{
             return 1;
         }
         if(tdata.recsec == -1)
             tdata.indefinite = TRUE;
-    }else{    // -http-server add
-        if(argc - optind < 3) {
-            if(argc - optind == 2 && use_udp) {
+    }
+	else   // -http-server add
+	{    
+        if(argc - optind < 3) 
+		{
+            if(argc - optind == 2 && use_udp) 
+			{
                 fprintf(stderr, "Fileless UDP broadcasting\n");
                 fileless = TRUE;
                 tdata.wfd = -1;
             }
-            else {
+            else 
+			{
                 fprintf(stderr, "Arguments are necessary!\n");
                 fprintf(stderr, "Try '%s --help' for more information.\n", argv[0]);
                 return 1;
             }
         }
 
-        fprintf(stderr, "pid = %d\n", getpid());
+//        fprintf(stderr, "pid = %d\n", getpid());
 
         /* tune */
         if(tune(argv[optind], &tdata, device) != 0)
@@ -828,12 +987,15 @@ main(int argc, char **argv)
 
         /* open output file */
         char *destfile = argv[optind + 2];
-        if(destfile && !strcmp("-", destfile)) {
+        if(destfile && !strcmp("-", destfile)) 
+		{
             use_stdout = TRUE;
             tdata.wfd = 1; /* stdout */
         }
-        else {
-            if(!fileless) {
+        else 
+		{
+            if(!fileless) 
+			{
                 int status;
                 char *path = strdup(argv[optind + 2]);
                 char *dir = dirname(path);
@@ -843,7 +1005,8 @@ main(int argc, char **argv)
                 free(path);
 
                 tdata.wfd = open(argv[optind + 2], (O_RDWR | O_CREAT | O_TRUNC), 0666);
-                if(tdata.wfd < 0) {
+                if(tdata.wfd < 0) 
+				{
                     fprintf(stderr, "Cannot open output file: %s\n",
                             argv[optind + 2]);
                     return 1;
@@ -853,24 +1016,40 @@ main(int argc, char **argv)
     }    // http-server add
 
     /* initialize decoder */
-    if(use_b25) {
+    if(use_b25)
+	 {
         decoder = b25_startup(&dopt);
-        if(!decoder) {
+        if(!decoder) 
+		{
             fprintf(stderr, "Cannot start b25 decoder\n");
             fprintf(stderr, "Fall back to encrypted recording\n");
             use_b25 = FALSE;
         }
     }
 
-    while(1){    // http-server add-
-        if(use_http){
+    //****************************************************
+    //************* Jacky Han Insertion Start ************
+    //****************************************************
+    if(tdata.IsPX4PX5PX6DeviceFlag == TRUE)
+       p_queue = create_queue(MAX_QUEUE_PX4PX5PX6);
+	else
+       p_queue = create_queue(MAX_QUEUE);
+    //****************************************************
+    //************** Jacky Han Insertion End *************
+    //****************************************************
+
+    while(1)    // http-server add-
+	{    
+        if(use_http)
+		{
             struct hostent *peer_host;
             struct sockaddr_in peer_sin;
 
             len = sizeof(peer_sin);
 
             connected_socket = accept(listening_socket, (struct sockaddr *)&peer_sin, &len);
-            if ( connected_socket == -1 ){
+            if ( connected_socket == -1 )
+			{
                 perror("accept");
                 return 1;
             }
@@ -878,9 +1057,11 @@ main(int argc, char **argv)
             peer_host = gethostbyaddr((char *)&peer_sin.sin_addr.s_addr,
                       sizeof(peer_sin.sin_addr), AF_INET);
             char    *h_name;
-            if ( peer_host == NULL ){
+            if ( peer_host == NULL )
+			{
                 h_name = "NONAME";
-            }else
+            }
+			else
                 h_name = peer_host->h_name;
 
             fprintf(stderr,"connect from: %s [%s] port %d\n", h_name, inet_ntoa(peer_sin.sin_addr), ntohs(peer_sin.sin_port));
@@ -906,15 +1087,18 @@ main(int argc, char **argv)
         }    // -http-server add
 
         /* initialize splitter */
-        if(use_splitter) {
+        if(use_splitter) 
+		{
             splitter = split_startup(sid_list);
-            if(splitter->sid_list == NULL) {
+            if(splitter->sid_list == NULL) 
+			{
                 fprintf(stderr, "Cannot start TS splitter\n");
                 return 1;
             }
         }
 
-        if(use_http){    // http-server add-
+        if(use_http)     // http-server add-
+		{    
             char header[] =  "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nCache-Control: no-cache\r\n\r\n";
             write(connected_socket, header, strlen(header));
 
@@ -922,25 +1106,33 @@ main(int argc, char **argv)
             tdata.wfd = connected_socket;
 
             //tune
-            if(tune(channel, &tdata, device) != 0){
-                fprintf(stderr, "Tuner cannot start recording\n");
+            if(tune(channel, &tdata, device) != 0)
+			{
+                fprintf(stderr, "(main) Tuner cannot start recording(1)\n");
+
                 continue;
             }
-        }else{    // -http-server add
+        }
+		else      // -http-server add
+		{    
             /* initialize udp connection */
-            if(use_udp) {
+            if(use_udp) 
+			{
               sockdata = calloc(1, sizeof(sock_data));
               struct in_addr ia;
               ia.s_addr = inet_addr(host_to);
-              if(ia.s_addr == INADDR_NONE) {
+              if(ia.s_addr == INADDR_NONE) 
+			  {
                     struct hostent *hoste = gethostbyname(host_to);
-                    if(!hoste) {
+                    if(!hoste) 
+					{
                         perror("gethostbyname");
                         return 1;
                     }
                     ia.s_addr = *(in_addr_t*) (hoste->h_addr_list[0]);
                 }
-                if((sockdata->sfd = socket(PF_INET, SOCK_DGRAM, 0)) < 0) {
+                if((sockdata->sfd = socket(PF_INET, SOCK_DGRAM, 0)) < 0) 
+				{
                     perror("socket");
                     return 1;
                 }
@@ -949,8 +1141,8 @@ main(int argc, char **argv)
                 sockdata->addr.sin_port = htons (port_to);
                 sockdata->addr.sin_addr.s_addr = ia.s_addr;
 
-                if(connect(sockdata->sfd, (struct sockaddr *)&sockdata->addr,
-                           sizeof(sockdata->addr)) < 0) {
+                if(connect(sockdata->sfd, (struct sockaddr *)&sockdata->addr,sizeof(sockdata->addr)) < 0) 
+				{
                     perror("connect");
                     return 1;
                 }
@@ -974,59 +1166,165 @@ main(int argc, char **argv)
         key_t key;
         key = (key_t)getpid();
 
-        if ((tdata.msqid = msgget(key, IPC_CREAT | 0666)) < 0) {
+        if ((tdata.msqid = msgget(key, IPC_CREAT | 0666)) < 0) 
+		{
             perror("msgget");
         }
         pthread_create(&ipc_thread, NULL, mq_recv, &tdata);
 
         /* start recording */
-        if(ioctl(tdata.tfd, START_REC, 0) < 0) {
-            fprintf(stderr, "Tuner cannot start recording\n");
+        if(ioctl(tdata.tfd, START_REC, 0) < 0) 
+		{
+            fprintf(stderr, "(main) Tuner cannot start recording(2)\n");
+
             return 1;
         }
 
-        fprintf(stderr, "\nRecording...\n");
+        fprintf(stderr, "\n(PID:%d)(CH:%s) Recording...\n",getpid(),isdb_ch_name_table[tdata.channel_name_index]);         // Jacky Han Modified
+
+#if 0		// 2017.09.18
+		ChannelLockFlag = FALSE;             // Jacky Han Added
+#endif
+		DropFirstReceivingDataCounter = 0;   // Jacky Han Added
 
         time(&tdata.start_time);
 
         /* read from tuner */
-        while(1) {
+        while(1) 
+		{
             if(f_exit)
                 break;
 
             time(&cur_time);
-            bufptr = malloc(sizeof(BUFSZ));
-            if(!bufptr) {
+            bufptr = malloc(sizeof(BUFSZ));			   
+            if(!bufptr) 
+			{
                 f_exit = TRUE;
                 break;
             }
-            bufptr->size = read(tdata.tfd, bufptr->buffer, MAX_READ_SIZE);
-            if(bufptr->size <= 0) {
-                if((cur_time - tdata.start_time) >= tdata.recsec && !tdata.indefinite) {
+            //****************************************************
+            //************* Jacky Han Insertion Start ************
+            //****************************************************
+            if(tdata.IsPX4PX5PX6DeviceFlag == TRUE)
+			   bufptr->pBuffer = malloc(sizeof(unsigned char) * MAX_READ_SIZE_PX4PX5PX6);
+			else
+			   bufptr->pBuffer = malloc(sizeof(unsigned char) * MAX_READ_SIZE);
+            if(!bufptr->pBuffer) 
+			{
+			    free(bufptr);
+				bufptr = NULL;
+                f_exit = TRUE;
+                break;
+            }
+			if(tdata.IsPX4PX5PX6DeviceFlag == TRUE)
+			{
+#if 0		// 2017.09.18
+			   if(ChannelLockFlag == FALSE)
+			   {
+				  ChannelLockFlag = get_px4px5px6_statistics(tdata.tfd, tdata.table->type, FALSE, tdata.channel_name_index);
+			   }
+#endif
+			}
+            //****************************************************
+            //************** Jacky Han Insertion End *************
+            //****************************************************
+
+            //****************************************************
+            //*********** Jacky Han Modification Start ***********
+            //****************************************************
+			if(tdata.IsPX4PX5PX6DeviceFlag == TRUE)
+               bufptr->size = read(tdata.tfd, bufptr->pBuffer, MAX_READ_SIZE_PX4PX5PX6);
+			else
+               bufptr->size = read(tdata.tfd, bufptr->pBuffer, MAX_READ_SIZE);
+            //****************************************************
+            //************ Jacky Han Modification End ************
+            //****************************************************
+            if(bufptr->size <= 0) 
+			{
+                if((cur_time - tdata.start_time) >= tdata.recsec && !tdata.indefinite) 
+				{
                     f_exit = TRUE;
                     enqueue(p_queue, NULL);
                     break;
                 }
-                else {
+                else 
+				{
+				    free(bufptr->pBuffer);
                     free(bufptr);
                     continue;
                 }
             }
+			else
+			{
+			   if(tdata.IsPX4PX5PX6DeviceFlag == TRUE)
+			   {
+			      if(tdata.channel_name_index >= 53)
+				  {
+                     if(DropFirstReceivingDataCounter < 2)
+					 {
+                        DropFirstReceivingDataCounter++;
+
+				        free(bufptr->pBuffer);
+                        free(bufptr);
+                        continue;
+					 }
+				  }
+			   }
+			}
+#ifdef ASV5220_USE_APKEY1
+            //****************************************************
+            //*********** Jacky Han Modification Start ***********
+            //****************************************************
+            if(tdata.IsPX4PX5PX6DeviceFlag == FALSE)
+			{
+		       if( (bufptr->size%188)==0 )
+			   {
+			       DTV_GetDecryptData(bufptr->pBuffer, bufptr->size/188 ,bufptr->pBuffer,tdata.tfd);
+			   }
+			}
+            //****************************************************
+            //************ Jacky Han Modification End ************
+            //****************************************************
+#endif
             enqueue(p_queue, bufptr);
 
             /* stop recording */
             time(&cur_time);
-            if((cur_time - tdata.start_time) >= tdata.recsec && !tdata.indefinite) {
+            if((cur_time - tdata.start_time) >= tdata.recsec && !tdata.indefinite) 
+			{
                 ioctl(tdata.tfd, STOP_REC, 0);
                 /* read remaining data */
-                while(1) {
+                while(1) 
+				{
                     bufptr = malloc(sizeof(BUFSZ));
-                    if(!bufptr) {
+                    if(!bufptr) 
+					{
                         f_exit = TRUE;
                         break;
                     }
-                    bufptr->size = read(tdata.tfd, bufptr->buffer, MAX_READ_SIZE);
-                    if(bufptr->size <= 0) {
+                    //****************************************************
+                    //*********** Jacky Han Modification Start ***********
+                    //****************************************************
+                    if(tdata.IsPX4PX5PX6DeviceFlag == TRUE)
+			           bufptr->pBuffer = malloc(sizeof(unsigned char) * MAX_READ_SIZE_PX4PX5PX6);
+			        else
+			           bufptr->pBuffer = malloc(sizeof(unsigned char) * MAX_READ_SIZE);
+                    if(!bufptr->pBuffer) 
+					{
+			           free(bufptr);
+			 	       bufptr = NULL;
+                       f_exit = TRUE;
+                       break;
+					}
+					if(tdata.IsPX4PX5PX6DeviceFlag == TRUE)
+                       bufptr->size = read(tdata.tfd, bufptr->pBuffer, MAX_READ_SIZE_PX4PX5PX6);
+					else
+                       bufptr->size = read(tdata.tfd, bufptr->pBuffer, MAX_READ_SIZE);
+                    //****************************************************
+                    //************ Jacky Han Modification End ************
+                    //****************************************************
+                    if(bufptr->size <= 0) 
+					{
                         f_exit = TRUE;
                         enqueue(p_queue, NULL);
                         break;
@@ -1053,35 +1351,51 @@ main(int argc, char **argv)
 
         /* release queue */
         destroy_queue(p_queue);
-        if(use_http){    // http-server add-
+        if(use_http)        // http-server add-
+		{    
             //reset queue
-            p_queue = create_queue(MAX_QUEUE);
+            //****************************************************
+            //*********** Jacky Han Modification Start ***********
+            //****************************************************
+            if(tdata.IsPX4PX5PX6DeviceFlag == TRUE)
+               p_queue = create_queue(MAX_QUEUE_PX4PX5PX6);
+	        else
+               p_queue = create_queue(MAX_QUEUE);
+            //****************************************************
+            //************ Jacky Han Modification End ************
+            //****************************************************
 
             /* close http socket */
             close(tdata.wfd);
 
             fprintf(stderr,"connection closed. still listening at port %d\n",port_http);
             f_exit = FALSE;
-        }else{    // -http-server add
+        }
+		else        // -http-server add
+		{   
             /* close output file */
-            if(!use_stdout){
+            if(!use_stdout)
+			{
                 fsync(tdata.wfd);
                 close(tdata.wfd);
             }
 
             /* free socket data */
-            if(use_udp) {
+            if(use_udp) 
+			{
                 close(sockdata->sfd);
                 free(sockdata);
             }
 
             /* release decoder */
             if(!use_http)
-            if(use_b25) {
+            if(use_b25) 
+			{
                 b25_shutdown(decoder);
             }
         }    // http-server add
-        if(use_splitter) {
+        if(use_splitter) 
+		{
             split_shutdown(splitter);
         }
 
